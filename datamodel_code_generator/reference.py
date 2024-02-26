@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 from collections import defaultdict
 from contextlib import contextmanager
@@ -40,7 +38,7 @@ from datamodel_code_generator.util import (
     PYDANTIC_V2,
     ConfigDict,
     cached_property,
-    field_validator,
+    model_validator,
 )
 
 if TYPE_CHECKING:
@@ -75,7 +73,7 @@ class _BaseModel(BaseModel):
                 exclude_unset: bool = False,
                 exclude_defaults: bool = False,
                 exclude_none: bool = False,
-            ) -> DictStrAny:
+            ) -> 'DictStrAny':
                 return self.model_dump(
                     include=include,
                     exclude=set(exclude or ()) | self._exclude_fields,
@@ -101,7 +99,7 @@ class _BaseModel(BaseModel):
                 exclude_unset: bool = False,
                 exclude_defaults: bool = False,
                 exclude_none: bool = False,
-            ) -> DictStrAny:
+            ) -> 'DictStrAny':
                 return super().dict(
                     include=include,
                     exclude=set(exclude or ()) | self._exclude_fields,
@@ -123,14 +121,19 @@ class Reference(_BaseModel):
     children: List[Any] = []
     _exclude_fields: ClassVar[Set[str]] = {'children'}
 
-    @field_validator('original_name')
-    def validate_original_name(cls, v: Any, values: Dict[str, Any]) -> str:
+    @model_validator(mode='before')
+    def validate_original_name(cls, values: Any) -> Any:
         """
         If original_name is empty then, `original_name` is assigned `name`
         """
-        if v:  # pragma: no cover
-            return v
-        return values.get('name', v)  # pragma: no cover
+        if not isinstance(values, dict):  # pragma: no cover
+            return values
+        original_name = values.get('original_name')
+        if original_name:
+            return values
+
+        values['original_name'] = values.get('name', original_name)
+        return values
 
     if PYDANTIC_V2:
         # TODO[pydantic]: The following keys were removed: `copy_on_model_validation`.
@@ -231,7 +234,7 @@ class FieldNameResolver:
 
         name = re.sub(r'[¹²³⁴⁵⁶⁷⁸⁹]|\W', '_', name)
         if name[0].isnumeric():
-            name = f'_{name}'
+            name = f'{self.special_field_name_prefix}_{name}'
 
         # We should avoid having a field begin with an underscore, as it
         # causes pydantic to consider it as private
@@ -497,7 +500,11 @@ class ModelResolver:
         if self.base_url:
             from .http import join_url
 
-            return join_url(self.base_url, ref)
+            joined_url = join_url(self.base_url, ref)
+            if '#' in joined_url:
+                return joined_url
+            return f'{joined_url}#'
+
         if is_url(ref):
             file_part, path_part = ref.split('#', 1)
             if file_part == self.root_id:
@@ -642,7 +649,8 @@ class ModelResolver:
         return self.references.get(self.resolve_ref(path))
 
     def delete(self, path: Union[Sequence[str], str]) -> None:
-        del self.references[self.resolve_ref(path)]
+        if self.resolve_ref(path) in self.references:
+            del self.references[self.resolve_ref(path)]
 
     def default_class_name_generator(self, name: str) -> str:
         # TODO: create a validate for class name

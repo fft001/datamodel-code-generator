@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, ClassVar, DefaultDict, Dict, List, Optional, Set, Tuple
 
@@ -54,12 +52,6 @@ class DataClass(DataModel):
             nullable=nullable,
         )
 
-    @property
-    def imports(self) -> Tuple[Import, ...]:
-        if any(f for f in self.fields if f.field):
-            return chain_as_tuple(super().imports, (IMPORT_FIELD,))
-        return super().imports
-
 
 class DataModelField(DataModelFieldBase):
     _FIELD_KEYS: ClassVar[Set[str]] = {
@@ -72,6 +64,13 @@ class DataModelField(DataModelFieldBase):
         'kw_only',
     }
     constraints: Optional[Constraints] = None
+
+    @property
+    def imports(self) -> Tuple[Import, ...]:
+        field = self.field
+        if field and field.startswith('field('):
+            return chain_as_tuple(super().imports, (IMPORT_FIELD,))
+        return super().imports
 
     def self_reference(self) -> bool:  # pragma: no cover
         return isinstance(self.parent, DataClass) and self.parent.reference.path in {
@@ -109,8 +108,12 @@ class DataModelField(DataModelFieldBase):
         if not data:
             return ''
 
-        if len(data) == 1 and 'default' in data:  # pragma: no cover
-            return repr(data['default'])
+        if len(data) == 1 and 'default' in data:
+            default = data['default']
+
+            if isinstance(default, (list, dict)):
+                return f'field(default_factory=lambda :{repr(default)})'
+            return repr(default)
         kwargs = [
             f'{k}={v if k == "default_factory" else repr(v)}' for k, v in data.items()
         ]

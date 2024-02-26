@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from abc import ABC
 from pathlib import Path
 from typing import Any, ClassVar, DefaultDict, Dict, List, Optional, Set, Tuple
@@ -13,7 +11,11 @@ from datamodel_code_generator.model import (
     DataModelFieldBase,
 )
 from datamodel_code_generator.model.base import UNDEFINED
-from datamodel_code_generator.model.pydantic.imports import IMPORT_EXTRA, IMPORT_FIELD
+from datamodel_code_generator.model.pydantic.imports import (
+    IMPORT_ANYURL,
+    IMPORT_EXTRA,
+    IMPORT_FIELD,
+)
 from datamodel_code_generator.reference import Reference
 from datamodel_code_generator.types import UnionIntFloat, chain_as_tuple
 from datamodel_code_generator.util import cached_property
@@ -85,7 +87,9 @@ class DataModelField(DataModelFieldBase):
         return result
 
     def self_reference(self) -> bool:
-        return isinstance(self.parent, BaseModel) and self.parent.reference.path in {
+        return isinstance(
+            self.parent, BaseModelBase
+        ) and self.parent.reference.path in {
             d.reference.path for d in self.data_type.all_data_types if d.reference
         }
 
@@ -109,12 +113,12 @@ class DataModelField(DataModelFieldBase):
                 data_type = data_type.data_types[0]
                 if (
                     data_type.reference
-                    and isinstance(data_type.reference.source, BaseModel)
+                    and isinstance(data_type.reference.source, BaseModelBase)
                     and isinstance(self.default, list)
                 ):  # pragma: no cover
                     return f'lambda :[{data_type.alias or data_type.reference.source.class_name}.{self._PARSE_METHOD}(v) for v in {repr(self.default)}]'
             elif data_type.reference and isinstance(
-                data_type.reference.source, BaseModel
+                data_type.reference.source, BaseModelBase
             ):  # pragma: no cover
                 return f'lambda :{data_type.alias or data_type.reference.source.class_name}.{self._PARSE_METHOD}({repr(self.default)})'
         return None
@@ -122,6 +126,11 @@ class DataModelField(DataModelFieldBase):
     def _process_data_in_str(self, data: Dict[str, Any]) -> None:
         if self.const:
             data['const'] = True
+
+    def _process_annotated_field_arguments(
+        self, field_arguments: List[str]
+    ) -> List[str]:
+        return field_arguments
 
     def __str__(self) -> str:
         data: Dict[str, Any] = {
@@ -136,10 +145,17 @@ class DataModelField(DataModelFieldBase):
         ):
             data = {
                 **data,
-                **{
-                    k: self._get_strict_field_constraint_value(k, v)
-                    for k, v in self.constraints.dict().items()
-                },
+                **(
+                    {}
+                    if any(
+                        d.import_ == IMPORT_ANYURL
+                        for d in self.data_type.all_data_types
+                    )
+                    else {
+                        k: self._get_strict_field_constraint_value(k, v)
+                        for k, v in self.constraints.dict(exclude_unset=True).items()
+                    }
+                ),
             }
 
         if self.use_field_description:
@@ -171,7 +187,7 @@ class DataModelField(DataModelFieldBase):
             return ''
 
         if self.use_annotated:
-            pass
+            field_arguments = self._process_annotated_field_arguments(field_arguments)
         elif self.required:
             field_arguments = ['...', *field_arguments]
         elif default_factory:
@@ -186,6 +202,12 @@ class DataModelField(DataModelFieldBase):
         if not self.use_annotated or not str(self):
             return None
         return f'Annotated[{self.type_hint}, {str(self)}]'
+
+    @property
+    def imports(self) -> Tuple[Import, ...]:
+        if self.field:
+            return chain_as_tuple(super().imports, (IMPORT_FIELD,))
+        return super().imports
 
 
 class BaseModelBase(DataModel, ABC):
@@ -220,12 +242,6 @@ class BaseModelBase(DataModel, ABC):
             default=default,
             nullable=nullable,
         )
-
-    @property
-    def imports(self) -> Tuple[Import, ...]:
-        if any(f for f in self.fields if f.field):
-            return chain_as_tuple(super().imports, (IMPORT_FIELD,))
-        return super().imports
 
     @cached_property
     def template_file_path(self) -> Path:
